@@ -82,6 +82,7 @@ add_executable(edge_ai_pipeline
     src/capture.cpp
     src/inference.cpp
     src/alarm.cpp
+    src/config.cpp
     ${YOLOV8_SOURCES}
 )
 
