@@ -7,14 +7,15 @@
   },
   "model": {
     "path": "../model/yolov8.rknn",
-    "conf_threshold": 0.45,
+    "conf_threshold": 0.30,
     "nms_threshold": 0.45
   },
   "rule": {
     "target_class": "person",
-    "roi": [[120, 80], [540, 80], [580, 420], [90, 420]],
-    "dwell_time_ms": 1000,
-    "cooldown_ms": 5000
+   
+    "roi": [[10, 10], [630, 10], [630, 470], [10, 470]],
+    "dwell_time_ms": 300,
+    "cooldown_ms": 3000
   },
   "mqtt": {
     "host": "127.0.0.1",
