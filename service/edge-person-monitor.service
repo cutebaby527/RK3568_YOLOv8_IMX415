@@ -1,0 +1,15 @@
+[Unit]
+Description=Edge Person Monitoring Pipeline
+After=network.target mosquitto.service
+Wants=mosquitto.service
+
+[Service]
+Type=simple
+User=linaro
+WorkingDirectory=/userdata/RK3568_Yolo
+ExecStart=/userdata/RK3568_Yolo/scripts/run_pipeline.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
