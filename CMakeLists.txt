@@ -126,6 +126,7 @@ target_include_directories(test_rule_engine PRIVATE
 )
 add_executable(web_viewer
     src/web_viewer.cpp
+    src/config.cpp
 )
 
 target_include_directories(web_viewer PRIVATE

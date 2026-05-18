@@ -1,4 +1,5 @@
 #include "common.h"
+#include "config.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -199,7 +200,7 @@ static const char INDEX_HTML[] =
     "  <h2>Edge Person Monitoring System</h2>\n"
     "  <div class='toolbar'>\n"
     "    <button onclick='toggleBoxes()'>Toggle Boxes</button>\n"
-    "    <span id='box_status'>Boxes: OFF</span>\n"
+    "    <span id='box_status'>Boxes: OFF</span><span style='margin-left:12px;color:#aaa'>ROI overlay: ON</span>\n"
     "  </div>\n"
     "  <div class='status' id='status'>Waiting for stream...</div>\n"
     "  <div class='panel'>\n"
@@ -311,15 +312,86 @@ static const char INDEX_HTML[] =
     "</body>\n"
     "</html>\n";
 
+
+// -------------------- ROI drawing --------------------
+
+static void draw_roi_overlay(cv::Mat& bgr, const std::vector<RoiPoint>& roi) {
+    if (roi.size() < 3) {
+        return;
+    }
+
+    std::vector<cv::Point> points;
+    points.reserve(roi.size());
+
+    for (const auto& p : roi) {
+        points.emplace_back(p.x, p.y);
+    }
+
+    const cv::Scalar roi_color(0, 255, 255);
+
+    cv::polylines(
+        bgr,
+        points,
+        true,
+        roi_color,
+        2,
+        cv::LINE_AA
+    );
+
+    for (size_t i = 0; i < points.size(); ++i) {
+        cv::circle(
+            bgr,
+            points[i],
+            4,
+            roi_color,
+            -1,
+            cv::LINE_AA
+        );
+
+        char label[16];
+        snprintf(label, sizeof(label), "P%zu", i + 1);
+
+        cv::putText(
+            bgr,
+            label,
+            cv::Point(points[i].x + 5, points[i].y - 5),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.45,
+            roi_color,
+            1,
+            cv::LINE_AA
+        );
+    }
+
+    cv::putText(
+        bgr,
+        "ROI",
+        cv::Point(points[0].x, points[0].y - 18),
+        cv::FONT_HERSHEY_SIMPLEX,
+        0.65,
+        roi_color,
+        2,
+        cv::LINE_AA
+    );
+}
+
 // -------------------- MJPEG --------------------
 
 struct MjpegArg {
     int fd;
     SharedFrame* shm;
     bool show_boxes;
+    bool show_roi;
+    std::vector<RoiPoint> roi;
 };
 
-static void serve_mjpeg(int fd, SharedFrame* shm, bool show_boxes) {
+static void serve_mjpeg(
+    int fd,
+    SharedFrame* shm,
+    bool show_boxes,
+    bool show_roi,
+    const std::vector<RoiPoint>& roi
+) {
     const char* hdr =
         "HTTP/1.0 200 OK\r\n"
         "Content-Type: multipart/x-mixed-replace;boundary=frame\r\n"
@@ -365,6 +437,10 @@ static void serve_mjpeg(int fd, SharedFrame* shm, bool show_boxes) {
             fprintf(stderr, "[web] cvtColor NV12 failed: %s\n", e.what());
             usleep(10000);
             continue;
+        }
+
+        if (show_roi) {
+            draw_roi_overlay(bgr, roi);
         }
 
         if (show_boxes) {
@@ -472,7 +548,7 @@ static void serve_mjpeg(int fd, SharedFrame* shm, bool show_boxes) {
 static void* mjpeg_thread(void* arg) {
     MjpegArg* a = static_cast<MjpegArg*>(arg);
 
-    serve_mjpeg(a->fd, a->shm, a->show_boxes);
+    serve_mjpeg(a->fd, a->shm, a->show_boxes, a->show_roi, a->roi);
 
     delete a;
     return nullptr;
@@ -593,7 +669,11 @@ static void serve_snapshot(int fd, const char* request) {
 
 // -------------------- HTTP dispatch --------------------
 
-static void handle_client(int fd, SharedFrame* shm) {
+static void handle_client(
+    int fd,
+    SharedFrame* shm,
+    const std::vector<RoiPoint>& roi
+) {
     char buf[1024];
     memset(buf, 0, sizeof(buf));
 
@@ -616,6 +696,8 @@ static void handle_client(int fd, SharedFrame* shm) {
         a->fd = fd;
         a->shm = shm;
         a->show_boxes = boxes;
+        a->show_roi = !roi.empty();
+        a->roi = roi;
 
         if (pthread_create(&t, nullptr, mjpeg_thread, a) != 0) {
             fprintf(stderr, "[web] pthread_create mjpeg failed\n");
@@ -658,6 +740,23 @@ int main(int argc, char** argv) {
     const char* mqtt_detect_topic = argc > 3 ? argv[3] : "edge/detect";
     int http_port = argc > 4 ? atoi(argv[4]) : 8080;
     const char* mqtt_alarm_topic = argc > 5 ? argv[5] : "edge/person/alarm";
+    const char* config_path = argc > 6 ? argv[6] : "../config/config.json";
+
+    AppConfig app_config;
+    std::string config_error;
+
+    if (load_app_config(config_path, app_config, config_error)) {
+        printf("[web] config loaded: %s roi_points=%zu\n",
+               config_path,
+               app_config.rule.roi.size());
+    } else {
+        fprintf(stderr,
+                "[web] config load failed: %s, error=%s\n",
+                config_path,
+                config_error.c_str());
+        fprintf(stderr,
+                "[web] continue without ROI overlay\n");
+    }
 
     int shm_fd = shm_open(SHM_NAME, O_RDONLY, 0666);
     if (shm_fd < 0) {
@@ -739,6 +838,9 @@ int main(int argc, char** argv) {
            mqtt_alarm_topic);
     printf("[web] shared memory: %s\n", SHM_NAME);
     printf("[web] expected frame: %dx%d NV12\n", SHM_WIDTH, SHM_HEIGHT);
+    printf("[web] ROI overlay: %s points=%zu\n",
+           app_config.rule.roi.empty() ? "OFF" : "ON",
+           app_config.rule.roi.size());
 
     while (true) {
         int fd = accept(srv, nullptr, nullptr);
@@ -751,7 +853,7 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        handle_client(fd, shm);
+        handle_client(fd, shm, app_config.rule.roi);
     }
 
     close(srv);
