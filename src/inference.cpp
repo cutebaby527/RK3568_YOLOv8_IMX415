@@ -1,5 +1,6 @@
 #include "inference.h"
 #include "common.h"
+#include "metrics.h"
 
 #include <atomic>
 #include <algorithm>
@@ -255,6 +256,7 @@ void inference_thread(
          * 如果队列满，直接丢弃，不阻塞实时视频。
          */
         out_queue.push(infer_result);
+        metrics_record_inference_frame();
 
         frame_index++;
 

@@ -3,6 +3,7 @@
 #include "inference.h"
 #include "alarm.h"
 #include "config.h"
+#include "metrics.h"
 
 #include <atomic>
 #include <csignal>
@@ -75,6 +76,7 @@ int main(int argc, char** argv) {
     int mqtt_port = config_loaded ? app_config.mqtt.port : 1883;
     std::string mqtt_detect_topic = config_loaded ? app_config.mqtt.topic_detect : "edge/detect";
     std::string mqtt_alarm_topic = config_loaded ? app_config.mqtt.topic_alarm : "edge/person/alarm";
+    std::string mqtt_metrics_topic = config_loaded ? app_config.mqtt.topic_metrics : "edge/person/metrics";
 
     if (positional_args.size() > 0) {
         model_path = positional_args[0];
@@ -96,6 +98,10 @@ int main(int argc, char** argv) {
         mqtt_alarm_topic = positional_args[4];
     }
 
+    if (positional_args.size() > 5) {
+        mqtt_metrics_topic = positional_args[5];
+    }
+
     printf("========================================\n");
     printf(" RK3568 YOLOv8 Edge AI Pipeline\n");
     printf(" Temporary NV12 passthrough stage\n");
@@ -114,9 +120,12 @@ int main(int argc, char** argv) {
     printf("[main] mqtt port   : %d\n", mqtt_port);
     printf("[main] detect topic: %s\n", mqtt_detect_topic.c_str());
     printf("[main] alarm topic : %s\n", mqtt_alarm_topic.c_str());
+    printf("[main] metrics topic: %s\n", mqtt_metrics_topic.c_str());
     printf("[main] camera      : /dev/video0\n");
     printf("[main] format      : %dx%d NV12\n", FRAME_WIDTH, FRAME_HEIGHT);
     printf("========================================\n");
+
+    metrics_init();
 
     std::atomic<bool> running(true);
     g_running = &running;
@@ -149,6 +158,7 @@ int main(int argc, char** argv) {
         mqtt_port,
         mqtt_detect_topic.c_str(),
         mqtt_alarm_topic.c_str(),
+        mqtt_metrics_topic.c_str(),
         app_config.rule,
         app_config.model.conf_threshold,
         app_config.snapshot

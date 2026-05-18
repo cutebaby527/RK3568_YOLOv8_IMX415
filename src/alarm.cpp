@@ -2,6 +2,7 @@
 #include "common.h"
 #include "rule_engine.h"
 #include "snapshot.h"
+#include "metrics.h"
 
 #include <mosquitto.h>
 
@@ -104,7 +105,7 @@ static void publish_raw_detection(
     );
 }
 
-static void publish_alarm_event(
+static bool publish_alarm_event(
     struct mosquitto* mosq,
     const char* topic,
     const std::string& event_id,
@@ -162,14 +163,64 @@ static void publish_alarm_event(
             topic,
             event_id.c_str()
         );
+        return true;
+    }
+
+    std::fprintf(
+        stderr,
+        "[mqtt] alarm publish failed topic=%s event_id=%s ret=%d\n",
+        topic,
+        event_id.c_str(),
+        ret
+    );
+
+    return false;
+}
+
+
+static void publish_metrics_event(
+    struct mosquitto* mosq,
+    const char* topic,
+    const MetricsSnapshot& snapshot,
+    double inference_fps
+) {
+    char payload[1024];
+
+    std::snprintf(
+        payload,
+        sizeof(payload),
+        "{"
+        "\"uptime_sec\":%llu,"
+        "\"inference_fps\":%.2f,"
+        "\"inference_frame_count\":%llu,"
+        "\"alarm_count\":%llu,"
+        "\"mqtt_detect_publish_count\":%llu,"
+        "\"mqtt_alarm_publish_count\":%llu,"
+        "\"last_alarm_ts\":%llu"
+        "}",
+        static_cast<unsigned long long>(snapshot.uptime_sec),
+        inference_fps,
+        static_cast<unsigned long long>(snapshot.inference_frame_count),
+        static_cast<unsigned long long>(snapshot.alarm_count),
+        static_cast<unsigned long long>(snapshot.mqtt_detect_publish_count),
+        static_cast<unsigned long long>(snapshot.mqtt_alarm_publish_count),
+        static_cast<unsigned long long>(snapshot.last_alarm_ts_ms)
+    );
+
+    const int ret = mosquitto_publish(
+        mosq,
+        nullptr,
+        topic,
+        static_cast<int>(std::strlen(payload)),
+        payload,
+        0,
+        false
+    );
+
+    if (ret == MOSQ_ERR_SUCCESS) {
+        std::printf("[metrics] topic=%s payload=%s\n", topic, payload);
     } else {
-        std::fprintf(
-            stderr,
-            "[mqtt] alarm publish failed topic=%s event_id=%s ret=%d\n",
-            topic,
-            event_id.c_str(),
-            ret
-        );
+        std::fprintf(stderr, "[metrics] publish failed topic=%s ret=%d\n", topic, ret);
     }
 }
 
@@ -180,12 +231,16 @@ void alarm_thread(
     int mqtt_port,
     const char* mqtt_detect_topic,
     const char* mqtt_alarm_topic,
+    const char* mqtt_metrics_topic,
     RuleConfig rule_config,
     double conf_threshold,
     SnapshotConfig snapshot_config
 ) {
     RuleEngine rule_engine(rule_config, conf_threshold);
     uint64_t alarm_seq = 0;
+
+    uint64_t last_metrics_ms = now_ms_for_rule();
+    uint64_t last_metrics_inference_count = 0;
 
     std::printf(
         "[rule] enabled target=%s conf=%.3f dwell=%dms cooldown=%dms roi_points=%zu\n",
@@ -220,14 +275,39 @@ void alarm_thread(
     }
 
     std::printf(
-        "[alarm] MQTT connected: %s:%d detect_topic=%s alarm_topic=%s\n",
+        "[alarm] MQTT connected: %s:%d detect_topic=%s alarm_topic=%s metrics_topic=%s\n",
         mqtt_host,
         mqtt_port,
         mqtt_detect_topic,
-        mqtt_alarm_topic
+        mqtt_alarm_topic,
+        mqtt_metrics_topic
     );
 
     while (running.load(std::memory_order_acquire)) {
+        const uint64_t metrics_now_ms = now_ms_for_rule();
+        if (metrics_now_ms >= last_metrics_ms + 5000) {
+            MetricsSnapshot snapshot = metrics_get_snapshot();
+
+            const uint64_t delta_frames =
+                snapshot.inference_frame_count >= last_metrics_inference_count
+                    ? snapshot.inference_frame_count - last_metrics_inference_count
+                    : 0;
+
+            const uint64_t delta_ms = metrics_now_ms - last_metrics_ms;
+            const double inference_fps =
+                delta_ms > 0 ? static_cast<double>(delta_frames) * 1000.0 / static_cast<double>(delta_ms) : 0.0;
+
+            publish_metrics_event(
+                mosq,
+                mqtt_metrics_topic,
+                snapshot,
+                inference_fps
+            );
+
+            last_metrics_ms = metrics_now_ms;
+            last_metrics_inference_count = snapshot.inference_frame_count;
+        }
+
         InferResult result;
 
         if (!queue.pop(result)) {
@@ -265,6 +345,7 @@ void alarm_thread(
 
             if (rule_result.alarm) {
                 const std::string event_id = make_event_id(++alarm_seq);
+                metrics_record_alarm(unix_time_ms());
 
                 std::printf(
                     "[alarm] person_intrusion event_id=%s seq=%llu bbox=[%d,%d,%d,%d] center=[%d,%d] dwell=%llums\n",
@@ -304,18 +385,20 @@ void alarm_thread(
                     );
                 }
 
-                publish_alarm_event(
-                    mosq,
-                    mqtt_alarm_topic,
-                    event_id,
-                    rule_det,
-                    rule_result,
-                    snapshot_path
-                );
+                if (publish_alarm_event(
+                        mosq,
+                        mqtt_alarm_topic,
+                        event_id,
+                        rule_det,
+                        rule_result,
+                        snapshot_path)) {
+                    metrics_record_mqtt_alarm_publish();
+                }
             }
         }
 
         publish_raw_detection(mosq, mqtt_detect_topic, result);
+        metrics_record_mqtt_detect_publish();
     }
 
     std::printf("[alarm] exiting\n");

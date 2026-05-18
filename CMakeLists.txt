@@ -85,6 +85,7 @@ add_executable(edge_ai_pipeline
     src/config.cpp
     src/rule_engine.cpp
     src/snapshot.cpp
+    src/metrics.cpp
     ${YOLOV8_SOURCES}
 )
 
