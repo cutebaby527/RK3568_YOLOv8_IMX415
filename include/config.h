@@ -33,7 +33,8 @@ struct RuleConfig {
 struct MqttConfig {
     std::string host = "127.0.0.1";
     int port = 1883;
-    std::string topic_alarm = "edge/detect";
+    std::string topic_detect = "edge/detect";
+    std::string topic_alarm = "edge/person/alarm";
     std::string topic_status = "edge/person/status";
     std::string topic_metrics = "edge/person/metrics";
 };

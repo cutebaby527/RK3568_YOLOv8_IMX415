@@ -136,6 +136,7 @@ bool load_app_config(const std::string& path, AppConfig& config, std::string& er
     if (!mqtt.empty()) {
         get_string_value(mqtt, "host", config.mqtt.host);
         get_int_value(mqtt, "port", config.mqtt.port);
+        get_string_value(mqtt, "topic_detect", config.mqtt.topic_detect);
         get_string_value(mqtt, "topic_alarm", config.mqtt.topic_alarm);
         get_string_value(mqtt, "topic_status", config.mqtt.topic_status);
         get_string_value(mqtt, "topic_metrics", config.mqtt.topic_metrics);
@@ -184,6 +185,7 @@ void print_app_config(const AppConfig& config) {
 
     std::printf("[config] mqtt.host          : %s\n", config.mqtt.host.c_str());
     std::printf("[config] mqtt.port          : %d\n", config.mqtt.port);
+    std::printf("[config] mqtt.topic_detect  : %s\n", config.mqtt.topic_detect.c_str());
     std::printf("[config] mqtt.topic_alarm   : %s\n", config.mqtt.topic_alarm.c_str());
     std::printf("[config] mqtt.topic_status  : %s\n", config.mqtt.topic_status.c_str());
     std::printf("[config] mqtt.topic_metrics : %s\n", config.mqtt.topic_metrics.c_str());

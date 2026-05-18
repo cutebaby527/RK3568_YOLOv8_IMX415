@@ -19,7 +19,8 @@
   "mqtt": {
     "host": "127.0.0.1",
     "port": 1883,
-    "topic_alarm": "edge/detect",
+    "topic_detect": "edge/detect",
+    "topic_alarm": "edge/person/alarm",
     "topic_status": "edge/person/status",
     "topic_metrics": "edge/person/metrics"
   },

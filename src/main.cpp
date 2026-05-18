@@ -73,7 +73,8 @@ int main(int argc, char** argv) {
     std::string model_path = config_loaded ? app_config.model.path : "../model/yolov8.rknn";
     std::string mqtt_host = config_loaded ? app_config.mqtt.host : "127.0.0.1";
     int mqtt_port = config_loaded ? app_config.mqtt.port : 1883;
-    std::string mqtt_topic = config_loaded ? app_config.mqtt.topic_alarm : "edge/detect";
+    std::string mqtt_detect_topic = config_loaded ? app_config.mqtt.topic_detect : "edge/detect";
+    std::string mqtt_alarm_topic = config_loaded ? app_config.mqtt.topic_alarm : "edge/person/alarm";
 
     if (positional_args.size() > 0) {
         model_path = positional_args[0];
@@ -88,7 +89,11 @@ int main(int argc, char** argv) {
     }
 
     if (positional_args.size() > 3) {
-        mqtt_topic = positional_args[3];
+        mqtt_detect_topic = positional_args[3];
+    }
+
+    if (positional_args.size() > 4) {
+        mqtt_alarm_topic = positional_args[4];
     }
 
     printf("========================================\n");
@@ -107,7 +112,8 @@ int main(int argc, char** argv) {
     printf("[main] model path  : %s\n", model_path.c_str());
     printf("[main] mqtt host   : %s\n", mqtt_host.c_str());
     printf("[main] mqtt port   : %d\n", mqtt_port);
-    printf("[main] mqtt topic  : %s\n", mqtt_topic.c_str());
+    printf("[main] detect topic: %s\n", mqtt_detect_topic.c_str());
+    printf("[main] alarm topic : %s\n", mqtt_alarm_topic.c_str());
     printf("[main] camera      : /dev/video0\n");
     printf("[main] format      : %dx%d NV12\n", FRAME_WIDTH, FRAME_HEIGHT);
     printf("========================================\n");
@@ -141,7 +147,8 @@ int main(int argc, char** argv) {
         std::ref(running),
         mqtt_host.c_str(),
         mqtt_port,
-        mqtt_topic.c_str(),
+        mqtt_detect_topic.c_str(),
+        mqtt_alarm_topic.c_str(),
         app_config.rule,
         app_config.model.conf_threshold
     );
