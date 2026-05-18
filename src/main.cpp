@@ -141,7 +141,9 @@ int main(int argc, char** argv) {
         std::ref(running),
         mqtt_host.c_str(),
         mqtt_port,
-        mqtt_topic.c_str()
+        mqtt_topic.c_str(),
+        app_config.rule,
+        app_config.model.conf_threshold
     );
 
     printf("[main] all threads started\n");

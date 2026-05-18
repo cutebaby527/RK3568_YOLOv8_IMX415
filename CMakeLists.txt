@@ -83,6 +83,7 @@ add_executable(edge_ai_pipeline
     src/inference.cpp
     src/alarm.cpp
     src/config.cpp
+    src/rule_engine.cpp
     ${YOLOV8_SOURCES}
 )
 
