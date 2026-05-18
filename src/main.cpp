@@ -150,7 +150,8 @@ int main(int argc, char** argv) {
         mqtt_detect_topic.c_str(),
         mqtt_alarm_topic.c_str(),
         app_config.rule,
-        app_config.model.conf_threshold
+        app_config.model.conf_threshold,
+        app_config.snapshot
     );
 
     printf("[main] all threads started\n");

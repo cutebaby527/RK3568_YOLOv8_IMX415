@@ -1,6 +1,7 @@
 #include "alarm.h"
 #include "common.h"
 #include "rule_engine.h"
+#include "snapshot.h"
 
 #include <mosquitto.h>
 
@@ -108,7 +109,8 @@ static void publish_alarm_event(
     const char* topic,
     const std::string& event_id,
     const RuleDetection& det,
-    const RuleResult& rule_result
+    const RuleResult& rule_result,
+    const std::string& snapshot_path
 ) {
     char payload[2048];
 
@@ -130,7 +132,7 @@ static void publish_alarm_event(
             "\"roi_name\":\"restricted_area_1\","
             "\"dwell_time_ms\":%llu"
         "},"
-        "\"snapshot\":\"\""
+        "\"snapshot\":\"%s\""
         "}",
         event_id.c_str(),
         static_cast<unsigned long long>(unix_time_ms()),
@@ -140,7 +142,8 @@ static void publish_alarm_event(
         det.y1,
         det.x2,
         det.y2,
-        static_cast<unsigned long long>(rule_result.dwell_time_ms)
+        static_cast<unsigned long long>(rule_result.dwell_time_ms),
+        snapshot_path.c_str()
     );
 
     const int ret = mosquitto_publish(
@@ -178,7 +181,8 @@ void alarm_thread(
     const char* mqtt_detect_topic,
     const char* mqtt_alarm_topic,
     RuleConfig rule_config,
-    double conf_threshold
+    double conf_threshold,
+    SnapshotConfig snapshot_config
 ) {
     RuleEngine rule_engine(rule_config, conf_threshold);
     uint64_t alarm_seq = 0;
@@ -275,12 +279,38 @@ void alarm_thread(
                     static_cast<unsigned long long>(rule_result.dwell_time_ms)
                 );
 
+                std::string snapshot_path;
+                std::string snapshot_error;
+
+                if (save_alarm_snapshot(
+                        event_id,
+                        rule_det,
+                        rule_config.roi,
+                        snapshot_config,
+                        snapshot_path,
+                        snapshot_error)) {
+                    if (!snapshot_path.empty()) {
+                        std::printf(
+                            "[snapshot] saved path=%s\n",
+                            snapshot_path.c_str()
+                        );
+                    }
+                } else {
+                    std::fprintf(
+                        stderr,
+                        "[snapshot] save failed event_id=%s error=%s\n",
+                        event_id.c_str(),
+                        snapshot_error.c_str()
+                    );
+                }
+
                 publish_alarm_event(
                     mosq,
                     mqtt_alarm_topic,
                     event_id,
                     rule_det,
-                    rule_result
+                    rule_result,
+                    snapshot_path
                 );
             }
         }

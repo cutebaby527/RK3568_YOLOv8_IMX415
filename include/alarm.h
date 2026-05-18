@@ -13,5 +13,6 @@ void alarm_thread(
     const char* mqtt_detect_topic,
     const char* mqtt_alarm_topic,
     RuleConfig rule_config,
-    double conf_threshold
+    double conf_threshold,
+    SnapshotConfig snapshot_config
 );
