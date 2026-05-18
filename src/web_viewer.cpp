@@ -121,6 +121,7 @@ static void* mqtt_thread(void* arg) {
     const char* port_str = args[1];
     const char* detect_topic = args[2];
     const char* alarm_topic = args[3];
+    const char* metrics_topic = args[4];
 
     int port = atoi(port_str);
 
@@ -137,16 +138,22 @@ static void* mqtt_thread(void* arg) {
 
     int ret = mosquitto_connect(mosq, host, port, 60);
     if (ret == MOSQ_ERR_SUCCESS) {
-        printf("[web] MQTT connected: %s:%d detect_topic=%s alarm_topic=%s\n",
+        printf("[web] MQTT connected: %s:%d detect_topic=%s alarm_topic=%s metrics_topic=%s\n",
                host,
                port,
                detect_topic,
-               alarm_topic);
+               alarm_topic,
+               metrics_topic);
 
         mosquitto_subscribe(mosq, nullptr, detect_topic, 0);
 
         if (strcmp(detect_topic, alarm_topic) != 0) {
             mosquitto_subscribe(mosq, nullptr, alarm_topic, 0);
+        }
+
+        if (strcmp(metrics_topic, detect_topic) != 0 &&
+            strcmp(metrics_topic, alarm_topic) != 0) {
+            mosquitto_subscribe(mosq, nullptr, metrics_topic, 0);
         }
 
         mosquitto_loop_forever(mosq, -1, 1);
@@ -192,6 +199,9 @@ static const char INDEX_HTML[] =
     "    .alarm-title { color:#f6c343; font-weight:bold; }\n"
     "    .muted { color:#999; font-size:12px; }\n"
     "    .snapshot { width:100%; max-height:220px; object-fit:contain; }\n"
+    "    .metrics-grid { display:grid; grid-template-columns: 1fr 1fr; gap:6px 10px; font-size:13px; }\n"
+    "    .metric-label { color:#aaa; }\n"
+    "    .metric-value { color:#fff; font-weight:bold; text-align:right; }\n"
     "    pre { background:#000; color:#0f0; padding:10px; height:170px; overflow:auto; font-size:12px; white-space:pre-wrap; }\n"
     "    a { color:#8cc8ff; }\n"
     "  </style>\n"
@@ -218,6 +228,18 @@ static const char INDEX_HTML[] =
     "        <a id='snapshot_link' href='#' target='_blank' style='display:none'>Open snapshot</a>\n"
     "        <div style='margin-top:8px'>\n"
     "          <img id='snapshot_img' class='snapshot' style='display:none'>\n"
+    "        </div>\n"
+    "      </div>\n"
+    "      <div class='card'>\n"
+    "        <h3>System Metrics</h3>\n"
+    "        <div class='metrics-grid'>\n"
+    "          <div class='metric-label'>Uptime</div><div class='metric-value' id='m_uptime'>-</div>\n"
+    "          <div class='metric-label'>Inference FPS</div><div class='metric-value' id='m_fps'>-</div>\n"
+    "          <div class='metric-label'>Inference Frames</div><div class='metric-value' id='m_frames'>-</div>\n"
+    "          <div class='metric-label'>Alarm Count</div><div class='metric-value' id='m_alarms'>-</div>\n"
+    "          <div class='metric-label'>MQTT Detect</div><div class='metric-value' id='m_mqtt_detect'>-</div>\n"
+    "          <div class='metric-label'>MQTT Alarm</div><div class='metric-value' id='m_mqtt_alarm'>-</div>\n"
+    "          <div class='metric-label'>Last Alarm TS</div><div class='metric-value' id='m_last_alarm'>-</div>\n"
     "        </div>\n"
     "      </div>\n"
     "      <div class='card'>\n"
@@ -284,6 +306,18 @@ static const char INDEX_HTML[] =
     "      }\n"
     "    }\n"
     "\n"
+    "    function updateMetrics(obj) {\n"
+    "      if (obj.uptime_sec !== undefined) document.getElementById('m_uptime').textContent = obj.uptime_sec + ' s';\n"
+    "      if (obj.inference_fps !== undefined) document.getElementById('m_fps').textContent = Number(obj.inference_fps).toFixed(2);\n"
+    "      if (obj.inference_frame_count !== undefined) document.getElementById('m_frames').textContent = obj.inference_frame_count;\n"
+    "      if (obj.alarm_count !== undefined) document.getElementById('m_alarms').textContent = obj.alarm_count;\n"
+    "      if (obj.mqtt_detect_publish_count !== undefined) document.getElementById('m_mqtt_detect').textContent = obj.mqtt_detect_publish_count;\n"
+    "      if (obj.mqtt_alarm_publish_count !== undefined) document.getElementById('m_mqtt_alarm').textContent = obj.mqtt_alarm_publish_count;\n"
+    "      if (obj.last_alarm_ts !== undefined && obj.last_alarm_ts > 0) {\n"
+    "        document.getElementById('m_last_alarm').textContent = obj.last_alarm_ts;\n"
+    "      }\n"
+    "    }\n"
+    "\n"
     "    const img = document.getElementById('stream');\n"
     "    img.onload = function() {\n"
     "      frameCount++;\n"
@@ -304,6 +338,8 @@ static const char INDEX_HTML[] =
     "        const obj = JSON.parse(e.data);\n"
     "        if (obj.event_type === 'person_intrusion') {\n"
     "          addAlarm(obj);\n"
+    "        } else if (obj.uptime_sec !== undefined || obj.inference_fps !== undefined) {\n"
+    "          updateMetrics(obj);\n"
     "        }\n"
     "      } catch (err) {\n"
     "      }\n"
@@ -740,7 +776,20 @@ int main(int argc, char** argv) {
     const char* mqtt_detect_topic = argc > 3 ? argv[3] : "edge/detect";
     int http_port = argc > 4 ? atoi(argv[4]) : 8080;
     const char* mqtt_alarm_topic = argc > 5 ? argv[5] : "edge/person/alarm";
-    const char* config_path = argc > 6 ? argv[6] : "../config/config.json";
+    const char* mqtt_metrics_topic = "edge/person/metrics";
+    const char* config_path = "../config/config.json";
+
+    if (argc > 6) {
+        if (strstr(argv[6], ".json") != nullptr) {
+            config_path = argv[6];
+        } else {
+            mqtt_metrics_topic = argv[6];
+        }
+    }
+
+    if (argc > 7) {
+        config_path = argv[7];
+    }
 
     AppConfig app_config;
     std::string config_error;
@@ -785,7 +834,8 @@ int main(int argc, char** argv) {
         mqtt_host,
         mqtt_port,
         mqtt_detect_topic,
-        mqtt_alarm_topic
+        mqtt_alarm_topic,
+        mqtt_metrics_topic
     };
 
     pthread_t mt;
@@ -831,11 +881,12 @@ int main(int argc, char** argv) {
 
     printf("[web] viewer started\n");
     printf("[web] HTTP: http://0.0.0.0:%d\n", http_port);
-    printf("[web] MQTT: %s:%s detect_topic=%s alarm_topic=%s\n",
+    printf("[web] MQTT: %s:%s detect_topic=%s alarm_topic=%s metrics_topic=%s\n",
            mqtt_host,
            mqtt_port,
            mqtt_detect_topic,
-           mqtt_alarm_topic);
+           mqtt_alarm_topic,
+           mqtt_metrics_topic);
     printf("[web] shared memory: %s\n", SHM_NAME);
     printf("[web] expected frame: %dx%d NV12\n", SHM_WIDTH, SHM_HEIGHT);
     printf("[web] ROI overlay: %s points=%zu\n",
