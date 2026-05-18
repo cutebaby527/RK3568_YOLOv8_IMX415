@@ -113,6 +113,15 @@ target_link_libraries(edge_ai_pipeline PRIVATE
     png
     z
 )
+
+add_executable(test_rule_engine
+    tests/test_rule_engine.cpp
+    src/rule_engine.cpp
+)
+
+target_include_directories(test_rule_engine PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 add_executable(web_viewer
     src/web_viewer.cpp
 )
