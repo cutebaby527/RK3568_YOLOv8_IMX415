@@ -1,5 +1,6 @@
 #include "inference.h"
 #include "common.h"
+#include "metrics.h"
 
 #include <atomic>
 #include <algorithm>
@@ -213,6 +214,23 @@ void inference_thread(
             if (!cls_name) {
                 cls_name = "unknown";
             }
+            if (std::strcmp(cls_name, "person") == 0 && frame_index % 5 == 0) {
+                const int cx = (left + right) / 2;
+                const int cy = (top + bottom) / 2;
+
+                std::printf(
+                    "[det] seq=%llu class=%s conf=%.3f bbox=[%d,%d,%d,%d] center=[%d,%d]\n",
+                    static_cast<unsigned long long>(frame.seq),
+                    cls_name,
+                    det->prop,
+                    left,
+                    top,
+                    right,
+                    bottom,
+                    cx,
+                    cy
+                );
+            }
 
             strncpy(shm->detects[i].name, cls_name, sizeof(shm->detects[i].name) - 1);
             shm->detects[i].name[sizeof(shm->detects[i].name) - 1] = '\0';
@@ -238,6 +256,7 @@ void inference_thread(
          * 如果队列满，直接丢弃，不阻塞实时视频。
          */
         out_queue.push(infer_result);
+        metrics_record_inference_frame();
 
         frame_index++;
 

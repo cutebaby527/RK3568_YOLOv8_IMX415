@@ -1,0 +1,35 @@
+{
+  "camera": {
+    "device": "/dev/video0",
+    "width": 640,
+    "height": 480,
+    "format": "NV12"
+  },
+  "model": {
+    "path": "../model/yolov8.rknn",
+    "conf_threshold": 0.30,
+    "nms_threshold": 0.45
+  },
+  "rule": {
+    "target_class": "person",
+   
+    "roi": [[10, 10], [630, 10], [630, 470], [10, 470]],
+    "dwell_time_ms": 300,
+    "cooldown_ms": 3000
+  },
+  "mqtt": {
+    "host": "127.0.0.1",
+    "port": 1883,
+    "topic_detect": "edge/detect",
+    "topic_alarm": "edge/person/alarm",
+    "topic_status": "edge/person/status",
+    "topic_metrics": "edge/person/metrics"
+  },
+  "web": {
+    "port": 8080
+  },
+  "snapshot": {
+    "enable": true,
+    "save_dir": "../events"
+  }
+}

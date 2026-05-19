@@ -1,0 +1,16 @@
+[Unit]
+Description=Edge Person Monitoring Web Viewer
+After=network.target mosquitto.service edge-person-monitor.service
+Wants=mosquitto.service edge-person-monitor.service
+Requires=edge-person-monitor.service
+
+[Service]
+Type=simple
+User=linaro
+WorkingDirectory=/userdata/RK3568_Yolo
+ExecStart=/userdata/RK3568_Yolo/scripts/run_web.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

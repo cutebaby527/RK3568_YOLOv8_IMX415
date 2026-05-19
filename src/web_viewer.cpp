@@ -1,4 +1,5 @@
 #include "common.h"
+#include "config.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -17,6 +18,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "opencv2/core/core.hpp"
@@ -117,7 +119,9 @@ static void* mqtt_thread(void* arg) {
 
     const char* host = args[0];
     const char* port_str = args[1];
-    const char* topic = args[2];
+    const char* detect_topic = args[2];
+    const char* alarm_topic = args[3];
+    const char* metrics_topic = args[4];
 
     int port = atoi(port_str);
 
@@ -134,8 +138,24 @@ static void* mqtt_thread(void* arg) {
 
     int ret = mosquitto_connect(mosq, host, port, 60);
     if (ret == MOSQ_ERR_SUCCESS) {
-        printf("[web] MQTT connected: %s:%d topic=%s\n", host, port, topic);
-        mosquitto_subscribe(mosq, nullptr, topic, 0);
+        printf("[web] MQTT connected: %s:%d detect_topic=%s alarm_topic=%s metrics_topic=%s\n",
+               host,
+               port,
+               detect_topic,
+               alarm_topic,
+               metrics_topic);
+
+        mosquitto_subscribe(mosq, nullptr, detect_topic, 0);
+
+        if (strcmp(detect_topic, alarm_topic) != 0) {
+            mosquitto_subscribe(mosq, nullptr, alarm_topic, 0);
+        }
+
+        if (strcmp(metrics_topic, detect_topic) != 0 &&
+            strcmp(metrics_topic, alarm_topic) != 0) {
+            mosquitto_subscribe(mosq, nullptr, metrics_topic, 0);
+        }
+
         mosquitto_loop_forever(mosq, -1, 1);
     } else {
         fprintf(stderr,
@@ -161,31 +181,71 @@ static const char INDEX_HTML[] =
     "<html>\n"
     "<head>\n"
     "  <meta charset='utf-8'>\n"
-    "  <title>Edge AI Live Viewer</title>\n"
+    "  <title>Edge Person Monitoring System</title>\n"
     "  <style>\n"
     "    body { font-family: Arial, sans-serif; background:#111; color:#eee; margin:0; padding:20px; }\n"
     "    h2 { margin-top:0; }\n"
+    "    .toolbar { margin:8px 0 14px 0; }\n"
     "    .panel { display:flex; gap:20px; align-items:flex-start; }\n"
+    "    .video-panel { flex: 0 0 auto; }\n"
+    "    .side-panel { width:460px; }\n"
     "    img { border:1px solid #444; max-width:100%; background:#000; }\n"
     "    button { padding:8px 14px; margin:4px; cursor:pointer; }\n"
-    "    pre { background:#000; color:#0f0; padding:10px; width:420px; height:480px; overflow:auto; }\n"
     "    .status { margin:10px 0; color:#aaa; }\n"
+    "    .card { background:#1b1b1b; border:1px solid #333; padding:10px; margin-bottom:12px; }\n"
+    "    .card h3 { margin:0 0 8px 0; }\n"
+    "    .alarm-list { height:210px; overflow:auto; }\n"
+    "    .alarm-item { border-left:4px solid #f6c343; background:#222; padding:8px; margin:8px 0; font-size:13px; }\n"
+    "    .alarm-title { color:#f6c343; font-weight:bold; }\n"
+    "    .muted { color:#999; font-size:12px; }\n"
+    "    .snapshot { width:100%; max-height:220px; object-fit:contain; }\n"
+    "    .metrics-grid { display:grid; grid-template-columns: 1fr 1fr; gap:6px 10px; font-size:13px; }\n"
+    "    .metric-label { color:#aaa; }\n"
+    "    .metric-value { color:#fff; font-weight:bold; text-align:right; }\n"
+    "    pre { background:#000; color:#0f0; padding:10px; height:170px; overflow:auto; font-size:12px; white-space:pre-wrap; }\n"
+    "    a { color:#8cc8ff; }\n"
     "  </style>\n"
     "</head>\n"
     "<body>\n"
-    "  <h2>Edge AI Live Viewer</h2>\n"
-    "  <div>\n"
+    "  <h2>Edge Person Monitoring System</h2>\n"
+    "  <div class='toolbar'>\n"
     "    <button onclick='toggleBoxes()'>Toggle Boxes</button>\n"
-    "    <span id='box_status'>Boxes: OFF</span>\n"
+    "    <span id='box_status'>Boxes: OFF</span><span style='margin-left:12px;color:#aaa'>ROI overlay: ON</span>\n"
     "  </div>\n"
     "  <div class='status' id='status'>Waiting for stream...</div>\n"
     "  <div class='panel'>\n"
-    "    <div>\n"
+    "    <div class='video-panel'>\n"
     "      <img id='stream' src='/stream'>\n"
     "    </div>\n"
-    "    <div>\n"
-    "      <h3>MQTT / Detection Events</h3>\n"
-    "      <pre id='events'></pre>\n"
+    "    <div class='side-panel'>\n"
+    "      <div class='card'>\n"
+    "        <h3>Alarm Events</h3>\n"
+    "        <div id='alarms' class='alarm-list'><div class='muted'>No alarm yet.</div></div>\n"
+    "      </div>\n"
+    "      <div class='card'>\n"
+    "        <h3>Latest Snapshot</h3>\n"
+    "        <div id='snapshot_empty' class='muted'>No snapshot yet.</div>\n"
+    "        <a id='snapshot_link' href='#' target='_blank' style='display:none'>Open snapshot</a>\n"
+    "        <div style='margin-top:8px'>\n"
+    "          <img id='snapshot_img' class='snapshot' style='display:none'>\n"
+    "        </div>\n"
+    "      </div>\n"
+    "      <div class='card'>\n"
+    "        <h3>System Metrics</h3>\n"
+    "        <div class='metrics-grid'>\n"
+    "          <div class='metric-label'>Uptime</div><div class='metric-value' id='m_uptime'>-</div>\n"
+    "          <div class='metric-label'>Inference FPS</div><div class='metric-value' id='m_fps'>-</div>\n"
+    "          <div class='metric-label'>Inference Frames</div><div class='metric-value' id='m_frames'>-</div>\n"
+    "          <div class='metric-label'>Alarm Count</div><div class='metric-value' id='m_alarms'>-</div>\n"
+    "          <div class='metric-label'>MQTT Detect</div><div class='metric-value' id='m_mqtt_detect'>-</div>\n"
+    "          <div class='metric-label'>MQTT Alarm</div><div class='metric-value' id='m_mqtt_alarm'>-</div>\n"
+    "          <div class='metric-label'>Last Alarm TS</div><div class='metric-value' id='m_last_alarm'>-</div>\n"
+    "        </div>\n"
+    "      </div>\n"
+    "      <div class='card'>\n"
+    "        <h3>Raw MQTT Events</h3>\n"
+    "        <pre id='events'></pre>\n"
+    "      </div>\n"
     "    </div>\n"
     "  </div>\n"
     "\n"
@@ -198,6 +258,64 @@ static const char INDEX_HTML[] =
     "      boxes = !boxes;\n"
     "      document.getElementById('box_status').textContent = boxes ? 'Boxes: ON' : 'Boxes: OFF';\n"
     "      document.getElementById('stream').src = boxes ? '/stream?boxes=1&t=' + Date.now() : '/stream?t=' + Date.now();\n"
+    "    }\n"
+    "\n"
+    "    function snapshotUrl(path) {\n"
+    "      if (!path) return '';\n"
+    "      const file = path.split('/').pop();\n"
+    "      if (!file) return '';\n"
+    "      return '/snapshot/' + encodeURIComponent(file);\n"
+    "    }\n"
+    "\n"
+    "    function addAlarm(obj) {\n"
+    "      const alarms = document.getElementById('alarms');\n"
+    "      const empty = alarms.querySelector('.muted');\n"
+    "      if (empty) empty.remove();\n"
+    "\n"
+    "      const item = document.createElement('div');\n"
+    "      item.className = 'alarm-item';\n"
+    "\n"
+    "      const eventId = obj.event_id || '-';\n"
+    "      const level = obj.level || 'warning';\n"
+    "      const cls = obj.object && obj.object.class ? obj.object.class : '-';\n"
+    "      const conf = obj.object && obj.object.confidence !== undefined ? Number(obj.object.confidence).toFixed(3) : '-';\n"
+    "      const dwell = obj.rule && obj.rule.dwell_time_ms !== undefined ? obj.rule.dwell_time_ms : '-';\n"
+    "      const snap = snapshotUrl(obj.snapshot || '');\n"
+    "\n"
+    "      item.innerHTML = '' +\n"
+    "        '<div class=\"alarm-title\">' + level + ' / ' + (obj.event_type || 'person_intrusion') + '</div>' +\n"
+    "        '<div>event_id: ' + eventId + '</div>' +\n"
+    "        '<div>object: ' + cls + ' conf=' + conf + '</div>' +\n"
+    "        '<div>dwell: ' + dwell + ' ms</div>' +\n"
+    "        (snap ? '<div><a href=\"' + snap + '\" target=\"_blank\">snapshot</a></div>' : '');\n"
+    "\n"
+    "      alarms.prepend(item);\n"
+    "\n"
+    "      while (alarms.children.length > 10) {\n"
+    "        alarms.removeChild(alarms.lastChild);\n"
+    "      }\n"
+    "\n"
+    "      if (snap) {\n"
+    "        const img = document.getElementById('snapshot_img');\n"
+    "        const link = document.getElementById('snapshot_link');\n"
+    "        document.getElementById('snapshot_empty').style.display = 'none';\n"
+    "        img.src = snap + '?t=' + Date.now();\n"
+    "        img.style.display = 'block';\n"
+    "        link.href = snap;\n"
+    "        link.style.display = 'inline';\n"
+    "      }\n"
+    "    }\n"
+    "\n"
+    "    function updateMetrics(obj) {\n"
+    "      if (obj.uptime_sec !== undefined) document.getElementById('m_uptime').textContent = obj.uptime_sec + ' s';\n"
+    "      if (obj.inference_fps !== undefined) document.getElementById('m_fps').textContent = Number(obj.inference_fps).toFixed(2);\n"
+    "      if (obj.inference_frame_count !== undefined) document.getElementById('m_frames').textContent = obj.inference_frame_count;\n"
+    "      if (obj.alarm_count !== undefined) document.getElementById('m_alarms').textContent = obj.alarm_count;\n"
+    "      if (obj.mqtt_detect_publish_count !== undefined) document.getElementById('m_mqtt_detect').textContent = obj.mqtt_detect_publish_count;\n"
+    "      if (obj.mqtt_alarm_publish_count !== undefined) document.getElementById('m_mqtt_alarm').textContent = obj.mqtt_alarm_publish_count;\n"
+    "      if (obj.last_alarm_ts !== undefined && obj.last_alarm_ts > 0) {\n"
+    "        document.getElementById('m_last_alarm').textContent = obj.last_alarm_ts;\n"
+    "      }\n"
     "    }\n"
     "\n"
     "    const img = document.getElementById('stream');\n"
@@ -216,10 +334,82 @@ static const char INDEX_HTML[] =
     "      const log = document.getElementById('events');\n"
     "      const now = new Date().toLocaleTimeString();\n"
     "      log.textContent = '[' + now + '] ' + e.data + '\\n' + log.textContent;\n"
+    "      try {\n"
+    "        const obj = JSON.parse(e.data);\n"
+    "        if (obj.event_type === 'person_intrusion') {\n"
+    "          addAlarm(obj);\n"
+    "        } else if (obj.uptime_sec !== undefined || obj.inference_fps !== undefined) {\n"
+    "          updateMetrics(obj);\n"
+    "        }\n"
+    "      } catch (err) {\n"
+    "      }\n"
     "    };\n"
     "  </script>\n"
     "</body>\n"
     "</html>\n";
+
+
+// -------------------- ROI drawing --------------------
+
+static void draw_roi_overlay(cv::Mat& bgr, const std::vector<RoiPoint>& roi) {
+    if (roi.size() < 3) {
+        return;
+    }
+
+    std::vector<cv::Point> points;
+    points.reserve(roi.size());
+
+    for (const auto& p : roi) {
+        points.emplace_back(p.x, p.y);
+    }
+
+    const cv::Scalar roi_color(0, 255, 255);
+
+    cv::polylines(
+        bgr,
+        points,
+        true,
+        roi_color,
+        2,
+        cv::LINE_AA
+    );
+
+    for (size_t i = 0; i < points.size(); ++i) {
+        cv::circle(
+            bgr,
+            points[i],
+            4,
+            roi_color,
+            -1,
+            cv::LINE_AA
+        );
+
+        char label[16];
+        snprintf(label, sizeof(label), "P%zu", i + 1);
+
+        cv::putText(
+            bgr,
+            label,
+            cv::Point(points[i].x + 5, points[i].y - 5),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.45,
+            roi_color,
+            1,
+            cv::LINE_AA
+        );
+    }
+
+    cv::putText(
+        bgr,
+        "ROI",
+        cv::Point(points[0].x, points[0].y - 18),
+        cv::FONT_HERSHEY_SIMPLEX,
+        0.65,
+        roi_color,
+        2,
+        cv::LINE_AA
+    );
+}
 
 // -------------------- MJPEG --------------------
 
@@ -227,9 +417,17 @@ struct MjpegArg {
     int fd;
     SharedFrame* shm;
     bool show_boxes;
+    bool show_roi;
+    std::vector<RoiPoint> roi;
 };
 
-static void serve_mjpeg(int fd, SharedFrame* shm, bool show_boxes) {
+static void serve_mjpeg(
+    int fd,
+    SharedFrame* shm,
+    bool show_boxes,
+    bool show_roi,
+    const std::vector<RoiPoint>& roi
+) {
     const char* hdr =
         "HTTP/1.0 200 OK\r\n"
         "Content-Type: multipart/x-mixed-replace;boundary=frame\r\n"
@@ -275,6 +473,10 @@ static void serve_mjpeg(int fd, SharedFrame* shm, bool show_boxes) {
             fprintf(stderr, "[web] cvtColor NV12 failed: %s\n", e.what());
             usleep(10000);
             continue;
+        }
+
+        if (show_roi) {
+            draw_roi_overlay(bgr, roi);
         }
 
         if (show_boxes) {
@@ -382,21 +584,143 @@ static void serve_mjpeg(int fd, SharedFrame* shm, bool show_boxes) {
 static void* mjpeg_thread(void* arg) {
     MjpegArg* a = static_cast<MjpegArg*>(arg);
 
-    serve_mjpeg(a->fd, a->shm, a->show_boxes);
+    serve_mjpeg(a->fd, a->shm, a->show_boxes, a->show_roi, a->roi);
 
     delete a;
     return nullptr;
 }
 
+
+// -------------------- Snapshot file serving --------------------
+
+static bool has_bad_path_char(const std::string& filename) {
+    return filename.empty() ||
+           filename.find("..") != std::string::npos ||
+           filename.find('/') != std::string::npos ||
+           filename.find('\\') != std::string::npos;
+}
+
+static void send_http_error(int fd, int code, const char* text) {
+    char hdr[256];
+    int n = snprintf(
+        hdr,
+        sizeof(hdr),
+        "HTTP/1.0 %d %s\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        "Cache-Control: no-cache\r\n"
+        "\r\n"
+        "%s\n",
+        code,
+        text,
+        text
+    );
+
+    if (n > 0) {
+        write_all(fd, hdr, static_cast<size_t>(n));
+    }
+
+    close(fd);
+}
+
+static void serve_snapshot(int fd, const char* request) {
+    const char* prefix = "GET /snapshot/";
+    const size_t prefix_len = strlen(prefix);
+
+    const char* start = request + prefix_len;
+    const char* end = strchr(start, ' ');
+    if (!end || end <= start) {
+        send_http_error(fd, 400, "Bad Request");
+        return;
+    }
+
+    std::string filename(start, static_cast<size_t>(end - start));
+
+    if (has_bad_path_char(filename)) {
+        send_http_error(fd, 400, "Bad Request");
+        return;
+    }
+
+    std::string file_path = std::string("../events/") + filename;
+
+    int img_fd = open(file_path.c_str(), O_RDONLY);
+    if (img_fd < 0) {
+        send_http_error(fd, 404, "Not Found");
+        return;
+    }
+
+    struct stat st {};
+    if (fstat(img_fd, &st) != 0 || st.st_size <= 0) {
+        close(img_fd);
+        send_http_error(fd, 404, "Not Found");
+        return;
+    }
+
+    const char* content_type = "image/jpeg";
+    if (filename.size() >= 4) {
+        const std::string suffix = filename.substr(filename.size() - 4);
+        if (suffix == ".png" || suffix == ".PNG") {
+            content_type = "image/png";
+        }
+    }
+
+    char hdr[256];
+    int n = snprintf(
+        hdr,
+        sizeof(hdr),
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %lld\r\n"
+        "Cache-Control: no-cache\r\n"
+        "\r\n",
+        content_type,
+        static_cast<long long>(st.st_size)
+    );
+
+    if (n <= 0 || !write_all(fd, hdr, static_cast<size_t>(n))) {
+        close(img_fd);
+        close(fd);
+        return;
+    }
+
+    char buf[8192];
+    while (true) {
+        ssize_t r = read(img_fd, buf, sizeof(buf));
+        if (r < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (r == 0) {
+            break;
+        }
+        if (!write_all(fd, buf, static_cast<size_t>(r))) {
+            break;
+        }
+    }
+
+    close(img_fd);
+    close(fd);
+}
+
 // -------------------- HTTP dispatch --------------------
 
-static void handle_client(int fd, SharedFrame* shm) {
+static void handle_client(
+    int fd,
+    SharedFrame* shm,
+    const std::vector<RoiPoint>& roi
+) {
     char buf[1024];
     memset(buf, 0, sizeof(buf));
 
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
     if (n <= 0) {
         close(fd);
+        return;
+    }
+
+    if (strncmp(buf, "GET /snapshot/", 14) == 0) {
+        serve_snapshot(fd, buf);
         return;
     }
 
@@ -408,6 +732,8 @@ static void handle_client(int fd, SharedFrame* shm) {
         a->fd = fd;
         a->shm = shm;
         a->show_boxes = boxes;
+        a->show_roi = !roi.empty();
+        a->roi = roi;
 
         if (pthread_create(&t, nullptr, mjpeg_thread, a) != 0) {
             fprintf(stderr, "[web] pthread_create mjpeg failed\n");
@@ -447,8 +773,39 @@ static void handle_client(int fd, SharedFrame* shm) {
 int main(int argc, char** argv) {
     const char* mqtt_host = argc > 1 ? argv[1] : "127.0.0.1";
     const char* mqtt_port = argc > 2 ? argv[2] : "1883";
-    const char* mqtt_topic = argc > 3 ? argv[3] : "edge/detect";
+    const char* mqtt_detect_topic = argc > 3 ? argv[3] : "edge/detect";
     int http_port = argc > 4 ? atoi(argv[4]) : 8080;
+    const char* mqtt_alarm_topic = argc > 5 ? argv[5] : "edge/person/alarm";
+    const char* mqtt_metrics_topic = "edge/person/metrics";
+    const char* config_path = "../config/config.json";
+
+    if (argc > 6) {
+        if (strstr(argv[6], ".json") != nullptr) {
+            config_path = argv[6];
+        } else {
+            mqtt_metrics_topic = argv[6];
+        }
+    }
+
+    if (argc > 7) {
+        config_path = argv[7];
+    }
+
+    AppConfig app_config;
+    std::string config_error;
+
+    if (load_app_config(config_path, app_config, config_error)) {
+        printf("[web] config loaded: %s roi_points=%zu\n",
+               config_path,
+               app_config.rule.roi.size());
+    } else {
+        fprintf(stderr,
+                "[web] config load failed: %s, error=%s\n",
+                config_path,
+                config_error.c_str());
+        fprintf(stderr,
+                "[web] continue without ROI overlay\n");
+    }
 
     int shm_fd = shm_open(SHM_NAME, O_RDONLY, 0666);
     if (shm_fd < 0) {
@@ -476,7 +833,9 @@ int main(int argc, char** argv) {
     const char* mqtt_args[] = {
         mqtt_host,
         mqtt_port,
-        mqtt_topic
+        mqtt_detect_topic,
+        mqtt_alarm_topic,
+        mqtt_metrics_topic
     };
 
     pthread_t mt;
@@ -522,9 +881,17 @@ int main(int argc, char** argv) {
 
     printf("[web] viewer started\n");
     printf("[web] HTTP: http://0.0.0.0:%d\n", http_port);
-    printf("[web] MQTT: %s:%s topic=%s\n", mqtt_host, mqtt_port, mqtt_topic);
+    printf("[web] MQTT: %s:%s detect_topic=%s alarm_topic=%s metrics_topic=%s\n",
+           mqtt_host,
+           mqtt_port,
+           mqtt_detect_topic,
+           mqtt_alarm_topic,
+           mqtt_metrics_topic);
     printf("[web] shared memory: %s\n", SHM_NAME);
     printf("[web] expected frame: %dx%d NV12\n", SHM_WIDTH, SHM_HEIGHT);
+    printf("[web] ROI overlay: %s points=%zu\n",
+           app_config.rule.roi.empty() ? "OFF" : "ON",
+           app_config.rule.roi.size());
 
     while (true) {
         int fd = accept(srv, nullptr, nullptr);
@@ -537,7 +904,7 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        handle_client(fd, shm);
+        handle_client(fd, shm, app_config.rule.roi);
     }
 
     close(srv);
