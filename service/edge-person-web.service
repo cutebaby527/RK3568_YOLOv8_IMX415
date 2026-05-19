@@ -1,7 +1,8 @@
 [Unit]
 Description=Edge Person Monitoring Web Viewer
 After=network.target mosquitto.service edge-person-monitor.service
-Wants=mosquitto.service
+Wants=mosquitto.service edge-person-monitor.service
+Requires=edge-person-monitor.service
 
 [Service]
 Type=simple
